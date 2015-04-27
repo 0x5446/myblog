@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>内存中运行的程序之剖析[译]</title>
+  
+    <meta name="author" content="Frank Tian">
+
+    <!-- Le HTML5 shim, for IE6-8 support of HTML elements -->
+    <!--[if lt IE 9]>
+      <script src="http://html5shim.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+
+    <!-- Le styles -->
+    <link href="/assets/twitter/stylesheets/bootstrap.min.css" type="text/css" rel="stylesheet" media="all">
+<link href="/assets/twitter/stylesheets/style.css" type="text/css" rel="stylesheet" media="all">
+<link href="/assets/twitter/widgets/google_prettify/stylesheets/twitter-bootstrap.css" type="text/css" rel="stylesheet" media="all">
+ 
+
+    <!-- Le fav and touch icons -->
+  <!-- Update these with your own images
+    <link rel="shortcut icon" href="images/favicon.ico">
+    <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="images/apple-touch-icon-72x72.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="images/apple-touch-icon-114x114.png">
+  -->
+  </head>
+
+  <body>
+
+    <div class="navbar">
+      <div class="navbar-inner">
+        <div class="container">
+          <a class="brand" href="/">TREE NEW BEE [听F.T树新风]</a>
+          <ul class="nav">
+            
+              
+
+
+  <li><a href="/archive">Archive</a></li>
+
+
+            
+              
+
+
+  <li><a href="/tags">Tags</a></li>
+
+
+            
+              
+
+
+  <li><a href="/categories">Categories</a></li>
+
+
+            
+              
+
+
+  <li><a href="/pages">Pages</a></li>
+
+
+            
+              
+
+
+  <li><a href="/about">About Me</a></li>
+
+
+            
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+
+      <div class="content">
+        <div class="page-header">
+  <h1>内存中运行的程序之剖析[译] </h1>
+</div>
+
+<div class="row">
+  <div class="span8">
+    <p>内存管理是操作系统的核心；理解它对编程和系统管理都至关重要。在接下来的几篇文章中，我将从实际应用的视角来阐述内存相关的知识点，但也不会回避其内部实现原理。因为概念是通用的，所以大部分例子都是基于32位x86体系的Linux和Windows。第一篇文章描述了运行中的程序在内存中是什么样子的。</p>
+
+<hr />
+
+<p>在多任务操作系统中，每个进程都运行在自己独享的内存沙箱中。这个沙箱就是 <strong>虚拟地址空间</strong> ，32位模式下就是一个 <strong>4GB的内存地址块</strong> 。这些虚拟地址通过 <strong>页表</strong> （ <em>原文：page tables</em> ）映射到物理内存，页表由内核维护，被处理器查阅。每个进程都有属于自己的页表，但这儿有一个陷阱（ <em>译者：不太理解这句什么意思</em> ）。一旦启用了虚拟地址，机器中的所有软件、 <em>包括内核本身</em> ，都会使用虚拟地址。因此，一部分虚拟地址空间一定是保留给内核使用的：</p>
+
+<p><img src="/assets/media/2015-04-23-内存中运行的程序之剖析[译]/kernelUserMemorySplit.png" /></p>
+
+<p>这 <strong>并不是说</strong> 内核使用那么多的物理内存，这仅仅表示内核可以用这部分地址空间来映射他需要的任何物理内存。内核地址空间在页表中用<a target=_blank href="http://duartes.org/gustavo/blog/post/cpu-rings-privilege-and-protection/">权限码</a>标记为独享的（小于等于权限码2），因此，如果用户态程序尝试访问，会触发一个页错误（ <em>原文：page fault</em> ）。Linux的内核空间是常驻的，并且在所有进程当中都映射到相同的物理内存。内核代码和数据总是可以寻址的，随时准备处理中断或系统调用。然而，当进程切换的时候，用户态地址空间部分的映射是随之改变的。</p>
+
+<p><img src="/assets/media/2015-04-23-内存中运行的程序之剖析[译]/linuxClassicAddressSpaceLayout.png" /></p>
+
+<p>蓝色区域表示已经映射到物理内存的虚拟地址，白色部分表示还未映射。在上图的例子中，众所周知，Firefox是个吃内存的大户，它占用了多得多的内存。地址空间中不同的条状相当于 <strong>内存段</strong> （ <em>原文：memory segments</em> ），比如堆，栈，等等。记住，这些段是简单的内存地址区间，它和<a target=_blank href="http://duartes.org/gustavo/blog/post/memory-translation-and-segmentation">Intel段表机制</a> <em>毫无关系</em> 。如下是Linux进程中标准的段布局：</p>
+
+<p><img src="/assets/media/2015-04-23-内存中运行的程序之剖析[译]/linuxFlexibleAddressSpaceLayout.png" /></p>
+
+<p>此时计算机运转得愉快，如上所示，机器中几乎所有进程的各个段的起始虚拟地址 <strong>完全相同</strong> ，这带来了易受远程攻击的安全隐患。攻击者往往需要引用绝对内存地址：栈地址，库函数地址，等等。基于各个段的起始虚拟地址完全一致这个事实，远程攻击者们一定会不假思索地选择这些位置下手。他们真这样干了之后，人们傻眼了。因此，随机地址空间越来越流行。Linux会对<a target="_blank" href="http://lxr.linux.no/linux+v2.6.28.1/fs/binfmt_elf.c#L542">栈</a>，<a target="_blank" href="http://lxr.linux.no/linux+v2.6.28.1/arch/x86/mm/mmap.c#L84">memory mapping段</a>，以及对<a target="_blank" href="http://lxr.linux.no/linux+v2.6.28.1/arch/x86/kernel/process_32.c#L729">堆</a>的起始地址设置随机偏移量。不幸的是，32位地址空间是如此吃紧，以至于几乎留不了太多空间来随机化起始地址和效率，并<a target="_blank" href="http://www.stanford.edu/~blp/papers/asrandom.pdf">降低了效率</a>（ <em>原文：hampering its effectiveness</em> ）</p>
+
+<p>进程地址空间顶部的段是栈，在大部分编程语言中，它用来存储局部变量和函数参数。调用一个方法或函数会在栈中压入一个新栈帧。当函数返回的时候栈帧会被销毁。如此简单的设计，大概是源自于数据都遵守严格的<a target=_blank href="http://en.wikipedia.org/wiki/Lifo">后进先出（ <em>原文：LIFO</em> ）</a>顺序吧，简单来说，就是无需复杂的数据结构来跟踪栈的数据——一个简单的指针指向栈顶即可。因此，压栈和弹栈的操作效率又高又明确。而且，经常的重复使用栈区域会把活跃的内存放到<a target=_blank href="http://duartes.org/gustavo/blog/post/intel-cpu-caches">cpu caches</a>中，加速访问。进程中每一个线程都拥有自己的栈。</p>
+
+<p>数据压栈越来越多，可能会把栈空间耗尽，这时候会出发一个页错误，Linux环境下会调用<a target=_blank href="http://lxr.linux.no/linux+v2.6.28/mm/mmap.c#L1716">expand_stack()</a>来处理，它会继续调用<a target=_blank href="http://lxr.linux.no/linux+v2.6.28/mm/mmap.c#L1544">acct_stack_growth()</a>来检查判断是否适合来扩展栈空间。如果栈的大小小于RLIMIT_STACK（通常是8MB），通常会增加栈空间，程序会愉快的继续执行，对这一切并无感知。这是一个正常机制，使得栈大小能根据需求来调整。然后，如果达到了栈大小的最大值，会产生 <strong>栈溢出</strong> 且程序会收到段错误。当映射的栈区域扩大以满足需求，当栈变小时，它不会再缩回来。很像联邦预算是不？丫只会扩充不会缩减。</p>
+
+<p>上面描述的动态栈空间增长，是访问未映射内存区域的 <strong>唯一场景</strong>，如上图白色部分，这是合法的。除此之外，任何访问未映射内存区域都会触发页错误，这会产生一个段错误。一些已映射的区域是只读的，因此，对这些区域的写操作也会导致段错误。</p>
+
+<p>在栈的下面，是内存映射区域（ <em>原文：memory mapping segment</em> ）。这里，内核直接把文件内容映射到内存。任何应用都可以通过Linux的<a target=_blank href="http://www.kernel.org/doc/man-pages/online/pages/man2/mmap.2.html">mmap()</a>系统调用（<a target=_blank href="http://lxr.linux.no/linux+v2.6.28.1/arch/x86/kernel/sys_i386_32.c#L27">实现</a>）来申请这样一个映射（Windows中，可以用<a target=_blank href="http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx">CreateFileMapping()</a> / <a target=_blank href="http://msdn.microsoft.com/en-us/library/aa366761(VS.85).aspx">MapViewOfFile()</a>）。内存映射是一种方便并且高效的使用文件I/O的方式，因此它被用来加载动态库。我们也可以创建一个 <strong>匿名内存映射</strong>（ <em>原文：anonymous memory mapping</em> ），匿名内存映射不对应任何文件，用来代替程序数据。在Linux下，如果你通过<a target=_blank href="http://www.kernel.org/doc/man-pages/online/pages/man3/malloc.3.html">malloc()</a>请求一块大内存，C库会创建这样一个匿名映射来代替使用堆的内存。“大”的意思指的是大于 <strong>MMAP_THRESHOLD</strong> 字节，默认128k，可以通过<a target=_blank href="http://www.kernel.org/doc/man-pages/online/pages/man3/undocumented.3.html">mallopt()</a>调整。</p>
+
+<p>上文提到了堆，堆是我们接下来投入讨论的一块儿地址空间。推用来在运行时进行内存分配，这一点很像栈；堆中数据的生命周期可以比给这些数据分配内存空间的函数的生命周期要长，这点和栈不同。大部分语言都为程序提供了堆的管理机制。满足内存请求是一件需要语言运行时以及内核联合协作的事情。对于C语言来说，堆分配的接口是<a target=_blank href="http://www.kernel.org/doc/man-pages/online/pages/man3/malloc.3.html">malloc()</a>及其相关函数，而在一些提供了垃圾回收机制的语言比如C#中，函数的名字会有所差别。</p>
+
+<p>如果堆中有足够的空间来满足内存请求，语言运行时环境即可处理，不需要内核的参与。否则，堆需要通过<a target=_blank href="http://www.kernel.org/doc/man-pages/online/pages/man2/brk.2.html">brk()</a>这个系统调用来扩大空间。堆管理是<a target=_blank href="http://g.oswego.edu/dl/html/malloc.html">复杂的</a>，需要精确的算法来应对程序乱七八糟的分配模式，从而争取更多的速度和内存使用效率。服务一个堆请求是有可能会非常耗时的。实时操作系统有一个<a target=_blank href="http://rtportal.upv.es/rtmalloc/">专用分配器</a>来处理这个问题。堆也可能变得片段化，如下图所示：</p>
+
+<p>最后，让我们看一下最靠下的段：BSS，data，text。BSS和data都是用来存储C语言中的静态或全局变量。它们之间的区别是BSS存储未初始化的变量，它们的值在程序当中没有被设置。BSS的内存区域是匿名的，它不映射到任何文件。如果你声明一个 <em>static int cntActiveUsers</em> ，它的值就存储在BSS中。</p>
+
+<p><img src="/assets/media/2015-04-23-内存中运行的程序之剖析[译]/fragmentedHeap.png" /></p>
+
+<p>data段，从另一方面来讲，存储那些在程序中初始化过的静态/全局变量。这段内存不是匿名的。它映射到程序二进制源文件中的初始化静态/全局变量部分。如果你在源代码中写 <em>static int cntWorkerBees = 10</em> ， <em>cntWorkerBees</em> 的值就存在data段中，开始的值为10。尽管data段映射到文件，但它属于私有 <strong>内存映射(private memory mapping)</strong> ，对这块儿内存区域的更新不会修改文件。这是一定的，否则对全局变量的赋值会改变磁盘上的二进制源文件，那就太不可思议太荒唐了！</p>
+
+<p>图示比较复杂，因为它有一个指针。这个例子中， <em>gonzo</em> 这个指针——一个四字节的内存地址，存储在data段中，而它所指的字符串却不是。这个字符串存储在代码段中。代码段是只读的，存储了所有的源代码以及一些常量字符串等。text段也映射到二进制源文件，但如果对text进行写操作会导致段错误。这会防止一些指针bugs，但显然不如在C代码中提前规避来得高效。下图是示例：</p>
+
+<p><img src="/assets/media/2015-04-23-内存中运行的程序之剖析[译]/mappingBinaryImage.png" /></p>
+
+<p>在Linux下，你可以通过文件 <em>/proc/pid_of_process/maps</em> 来查看进程的各个内存区域。 记住，一个段可能包含很多区域。比如，在mmap段中，每个映射到内存的文件通常都有它自己的内存区域，动态库还拥有额外的内存区域就像BSS和data一样。在下一篇文章中，我们会彻底搞清楚“区域”到底是什么意思。而且，有时候人们说“数据段”的意思是data + bss + heap。</p>
+
+<p>你可以通过nm和objdump命令来查看二进制源文件把符号、地址、段等等信息打印出来。最后，上面所描述的虚拟地址的管理设计在Linux里是很“灵活”的，它已被Linux作为首选机制好多年了，它假设RLIMIT_STACK变量是有值的，如果没有，那么Linux则退回到“传统”方式管理内存，如下图所示：</p>
+
+<p><img src="/assets/media/2015-04-23-内存中运行的程序之剖析[译]/virtualMemoryInProcessSwitch.png" /></p>
+
+<p>上图就是虚拟内存空间的设计。下一篇文章会讨论内核如何跟踪这些内存区域。进而我们会看看内存映射原理，相关联的文件如何读写，及内存使用情况图表的含义。</p>
+
+    <hr>
+    <div class="pagination">
+      <ul>
+        <ul>
+          
+          
+            <li class="prev disabled"><a>&larr; Previous</a></li>
+          
+
+            <li><a href="/archive">Archive</a></li>
+
+          
+            <li class="next"><a href="/2013/new-born.html" title="你的第一篇博客">Next &rarr;</a></li>
+          
+          
+        </ul>
+      </ul>
+    </div>
+    <hr>
+    
+<div id="disqus_thread"></div>
+<script>
+    var disqus_developer = 1;
+    var disqus_shortname = 'jekyllbootstrap'; // required: replace example with your forum shortname
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = 'http://' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+<a href="http://disqus.com" class="dsq-brlink">blog comments powered by <span class="logo-disqus">Disqus</span></a>
+
+  </div>
+  
+  <div class="span4">
+    <h4>Published</h4>
+    <div class="date"><span>2015-04-23</span></div>
+    <br>
+    <h4>Categories</h4>
+    <ul class="tag_box">
+    
+      <li>
+  <a href="/categories/#cs-ref">cs <span>1</span></a>
+</li>
+    
+    </ul>
+    <br>
+    <h4>Tags</h4>
+    <ul class="tag_box">
+    
+      <li>
+  <a href="/tags/#%E8%AF%91%E6%96%87-ref">译文 <span>1</span></a>
+</li>
+    
+      <li>
+  <a href="/tags/#%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F-ref">操作系统 <span>1</span></a>
+</li>
+    
+      <li>
+  <a href="/tags/#%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86-ref">内存管理 <span>1</span></a>
+</li>
+    
+    </ul>
+  </div>
+</div>
+
+      </div>
+
+      <footer>
+        <p>&copy; Frank Tian 2013 
+          with help from <a href="http://github.com/wendal/gor" target="_blank" title="Gor -- Fast Blog">Gor</a>
+          and <a href="http://twitter.github.com/bootstrap/" target="_blank">Twitter Bootstrap</a>
+		  and Idea from <a href="http://ruhoh.com" target="_blank" title="The Definitive Technical Blogging Framework">ruhoh</a>
+        </p>
+      </footer>
+
+    </div> <!-- /container -->
+
+    
+<script src="//cdnjscn.b0.upaiyun.com/libs/prettify/r298/prettify.min.js"></script>
+<script>
+  var pres = document.getElementsByTagName("pre");
+  for (var i=0; i < pres.length; ++i) {
+    pres[i].className = "prettyprint linenums";
+  }
+  prettyPrint();
+</script>
+
+    
+<script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  var pluginUrl = '//www.google-analytics.com/plugins/ga/inpage_linkid.js';
+  _gaq.push(['_require', 'inpage_linkid', pluginUrl]);
+  _gaq.push(['_setAccount', 'UA-123-12']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+</script>
+  </body>
+</html>
