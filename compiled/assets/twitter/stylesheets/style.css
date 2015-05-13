@@ -145,5 +145,21 @@ p {
 				line-height: 20px !important;
 				height: 20px !important;
 			}
+			.container, .navbar-fixed-top .container, .navbar-fixed-bottom .container {
+				max-width: 960px;
+				width:auto;
+			}
+
+			.content [class*="span"] {
+				float: none;
+				width: auto; 
+			}
+
+			.content img {
+				width: 98%;
+			}
+		    .navbar .nav>li>a{
+		    	padding-right : 6px;
+		    }
 		}
 
